@@ -5,7 +5,7 @@
 #FROM openshift/base-centos7
 #MAINTAINER Ganesh Radhakrishnan ganrad01@gmail.com
 # HOME in base image is /opt/app-root/src
-FROM registry.access.redhat.com/ubi8/ubi
+FROM registry.access.redhat.com/ubi8/s2i-base
 
 
 # Builder version
@@ -52,7 +52,7 @@ RUN curl -fSL https://services.gradle.org/distributions/gradle-$GRADLE_VERSION-b
 ENV PATH=/usr/local/bin/mvn:/usr/local/bin/gradle:$PATH
 
 # Set the default build type to 'Maven'
-ENV BUILD_TYPE=Maven
+ENV BUILD_TYPE=Gradle
 
 # Drop the root user and make the content of /opt/openshift owned by user 1001
 RUN chown -R 1001:1001 /opt/openshift /opt/app-root/src
