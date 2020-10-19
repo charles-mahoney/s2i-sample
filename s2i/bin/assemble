@@ -1,0 +1,167 @@
+#!/bin/bash -e
+# ID:12-8-2017
+#
+# S2I assemble script for the 'springboot-sti' image.
+# The 'assemble' script builds your application source ready to run.
+#
+# For more information refer to the documentation:
+#	https://github.com/openshift/source-to-image/blob/master/docs/builder_image.md
+#
+#HOME directory of base image =>  /opt/app-root/src
+
+execute_maven_build()
+{
+  echo "---> Building application using Maven ..."
+
+  MAVEN_ARGS="package -DskipTests ${MAVEN_ARGS_APPEND}"
+  echo "---> Found pom.xml.  Attempting to build with 'mvn ${MAVEN_ARGS}'"
+
+  echo "---> Using $(mvn --version)"
+
+  # Execute the actual build
+  mvn -e $MAVEN_ARGS
+
+  ERR=$?
+  if [ $ERR -ne 0 ]; then
+    echo "Aborting due to error code $ERR from Maven build"
+    exit $ERR
+  fi
+
+  # Copy built artifacts (if any!) from the target/ directory
+  # to the $DEPLOY_DIR directory for later deployment
+  cp -v $HOME/target/*.* $DEPLOY_DIR 2> /dev/null
+
+  # Clean up after Maven run ....
+  mvn clean
+
+  if [ -d "$HOME/.m2/repository" ]; then
+    rm -rf $HOME/.m2/repository
+  fi
+}
+
+execute_gradlew_build(){
+  echo "---> Building application using Gradle ..."
+
+  GRADLE_ARGS="clean build ${GRADLE_ARGS_APPEND}"
+  echo "---> Found gradle.build. Attempting to build with '$HOME/gradlew ${GRADLE_ARGS}'"
+
+  #echo "---> Using $($HOME/gradlew -v)"
+  echo "---> Building: Gradle wrapper"
+  gradle wrapper
+  echo "---> Building: Gradle wrapper - Set version to 6.7"
+  $HOME/gradlew wrapper --gradle-version 6.7
+  echo "---> Building: Gradle wrapper - execute"
+  $HOME/gradlew $GRADLE_ARGS
+
+  cp -v $HOME/build/libs/*.jar $DEPLOY_DIR 2> /dev/null
+
+  echo "Build Complete"
+
+}
+
+execute_gradle_build()
+{
+  echo "---> Building application using Gradle ..."
+
+  GRADLE_ARGS="assemble ${GRADLE_ARGS_APPEND}"
+  echo "---> Found gradle.build. Attempting to build with 'gradle -s ${GRADLE_ARGS}'"
+
+  echo "---> Using $(gradle --version)"
+
+  # Execute the actual build
+  gradle -s $GRADLE_ARGS
+
+  ERR=$?
+  if [ $ERR -ne 0 ]; then
+    echo "Aborting due to error code $ERR from Gradle build"
+    exit $ERR
+  fi
+
+  # Copy built artifacts (if any!) from the builds/libs directory
+  # to the $DEPLOY_DIR directory for later deployment
+  cp -v $HOME/build/libs/*.* $DEPLOY_DIR 2> /dev/null
+
+  # Clean up after Gradle run ....
+  gradle clean
+
+  if [ -d "$HOME/.gradle/caches" ]; then
+    rm -rf $HOME/.gradle/caches
+  fi
+}
+
+echo "--> S2I:assemble step start ..."
+echo "--> Executing script as user=" + `id`
+
+# If the 'springboot-java' assemble script is executed with '-h' flag,
+# print the usage.
+if [ "$1" = "-h" ]; then
+  exec /usr/libexec/s2i/usage
+fi
+
+# Restore artifacts from the previous build (if they exist).
+if [ "$(ls /tmp/artifacts/ 2>/dev/null)" ]; then
+  echo "---> Restoring build artifacts"
+  mv /tmp/artifacts/. ./
+fi
+
+echo "---> Starting Java web application build process ..."
+echo "---> Application source directory is set to $HOME ..."
+
+DEPLOY_DIR=/opt/openshift
+echo "---> Set target directory to $DEPLOY_DIR ..."
+
+echo "---> Clear deploy directory"
+rm -rf $DEPLOY_DIR/*.*
+echo "---> Clear Home Directory"
+rm -rf $HOME/*
+
+echo "---> List temp directory contents"
+ls -la /tmp/src/
+
+
+if [ $BUILD_TYPE = "Maven" ]; then
+  cp -Rf /tmp/src/. ./
+elif [ $BUILD_TYPE = "Gradle" ]; then
+  mkdir ./src
+  cp -Rf /tmp/src/src/. ./src/
+  ##mkdir ./.gradle
+  #cp -Rf /tmp/src/.gradle/. ./.gradle/
+  cp /tmp/src/build.gradle ./
+  cp /tmp/src/settings.gradle ./
+fi
+
+echo "---> Copied application source to $HOME ..."
+ls -la $HOME
+
+echo "---> S2I:assemble Build type=$BUILD_TYPE ..."
+if [ $BUILD_TYPE = "Maven" ] && [ -f "$HOME/pom.xml" ]; then
+  execute_maven_build
+elif [ $BUILD_TYPE = "Gradle" ] && [ -f "$HOME/build.gradle" ] && [ -f "$HOME/gradle/wrapper/gradle-wrapper.properties" ]; then
+  echo "---> S2I:assemble do gradle wrapper build"
+  chmod 777 gradlew
+  execute_gradlew_build
+elif [ $BUILD_TYPE = "Gradle" ] && [ -f "$HOME/build.gradle" ]; then
+  echo "---> S2I:assemble do gradle build"
+  execute_gradle_build
+else
+  # Copy the fat jar to the deployment directory
+  cp -v $HOME/*.jar $DEPLOY_DIR 2> /dev/null
+fi
+
+echo "--> Build complete ...."
+echo "--> Copy Resulting Jar"
+
+#ls -lsatr $HOME/build/libs/
+#mv $HOME/build/libs/*.jar $DEPLOY_DIR/app.jar
+echo "---> Deploy Directory contents:"
+ls -lsatr $DEPLOY_DIR
+
+# For Spring Boot, there should only be 1 fat jar
+if [ $(ls $DEPLOY_DIR/*.jar | wc -l) -eq 1 ]; then
+  mv $DEPLOY_DIR/*.jar $DEPLOY_DIR/app.jar
+  [ ! -f $DEPLOY_DIR/app.jar ] && echo "Application could not be properly built." && exit 1
+  echo "---> Application deployed successfully.  jar file is located in $DEPLOY_DIR/app.jar"
+else
+  echo "---> Application has more than 1 JAR"
+  exit 1
+fi
